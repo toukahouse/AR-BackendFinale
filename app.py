@@ -9,6 +9,8 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from gtts import gTTS
 from contextlib import closing
+import asyncio
+import edge_tts
 
 # Muat variabel dari file .env
 load_dotenv()
@@ -33,16 +35,31 @@ def get_db_connection():
     )
 
 # --- FUNGSI HELPER TTS KE BASE64 (BARU!) ---
-# Fungsi ini bakal ngubah teks jadi suara, terus dibungkus jadi Base64 biar bisa dikirim ke Unity
+# --- FUNGSI HELPER TTS NEURAL (EDGE-TTS) ---
 def generate_audio_base64(text):
     try:
-        tts = gTTS(text=text, lang='en', tld='com', slow=True)
-        mp3_fp = io.BytesIO()
-        tts.write_to_fp(mp3_fp)
-        mp3_fp.seek(0)
-        return base64.b64encode(mp3_fp.read()).decode('utf-8')
+        # Pilihan Suara Guru: 
+        # "en-US-AriaNeural" (Cewek dewasa, ramah)
+        # "en-US-AnaNeural" (Cewek ceria, cocok buat anak kecil)
+        # "en-US-GuyNeural" (Cowok)
+        voice = "en-US-AriaNeural" 
+        
+        # Karena edge-tts itu asynchronous, kita bungkus pakai asyncio
+        async def _generate():
+            communicate = edge_tts.Communicate(text, voice)
+            audio_data = b""
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    audio_data += chunk["data"]
+            return audio_data
+
+        # Jalankan dan tangkap hasil byte audio-nya
+        audio_bytes = asyncio.run(_generate())
+        
+        # Ubah ke Base64 buat dikirim ke Unity
+        return base64.b64encode(audio_bytes).decode('utf-8')
     except Exception as e:
-        print(f"⚠️ Error generate TTS: {e}")
+        print(f"⚠️ Error generate Neural TTS: {e}")
         return ""
 
 @app.route('/')
@@ -176,8 +193,9 @@ def tanya_ai():
             f"Use simple words. Add commas (,) frequently to create natural reading pauses."
         )
     elif question_key in question_map:
+# INI KODE BARU
         if question_key == "ejaan":
-            prompt = f"Eja kata '{object_name}' huruf per huruf, pisahkan dengan tanda hubung (-). Contoh: B-O-O-K. Balas ejaannya saja."
+            prompt = f"Spell the word '{object_name}' letter by letter. Separate each letter with a period and a space. Example: B. O. O. K. Only reply with the spelling."
         else:
             prompt = f"Pertanyaan: '{question_map[question_key]}'. Jawab sangat singkat dalam Bahasa Inggris untuk anak 10 tahun (maks 2 kalimat). Jangan menyapa."
     else:
