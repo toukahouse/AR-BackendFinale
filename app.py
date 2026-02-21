@@ -165,21 +165,25 @@ def tanya_ai():
     question_key = data['question_key']
     custom_question = data.get('custom_question', '')
 
-    # --- CEK CACHE DATABASE ---
+    # --- CEK CACHE DATABASE (HEMAT API GEMINI) ---
     if question_key != "custom":
-        if object_name not in KNOWLEDGE_BASE:
-            try:
-                with closing(get_db_connection()) as conn:
-                    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                        cur.execute("SELECT * FROM objects WHERE object_name = %s", (object_name,))
-                        db_result = cur.fetchone()
-                        
-                        if db_result and question_key in db_result and db_result[question_key]:
-                            # Return dari DB + Suara
-                            audio_b64 = generate_audio_base64(db_result[question_key])
-                            return jsonify({"status": "sukses", "jawaban": db_result[question_key], "audio_base64": audio_b64})
-            except Exception as db_error:
-                print(f"⚠️ Gagal cek cache: {db_error}")
+        try:
+            with closing(get_db_connection()) as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("SELECT * FROM objects WHERE object_name = %s", (object_name,))
+                    db_result = cur.fetchone()
+                    
+                    # Kalau baris bendanya ada, DAN jawaban untuk tombol ini udah pernah diisi...
+                    if db_result and question_key in db_result and db_result[question_key]:
+                        print(f"✅ BINGO! Jawaban {question_key} untuk {object_name} diambil dari DATABASE NEON!")
+                        # Return dari DB + Suara langsung, STOP di sini, gak usah panggil Gemini
+                        audio_b64 = generate_audio_base64(db_result[question_key])
+                        return jsonify({"status": "sukses", "jawaban": db_result[question_key], "audio_base64": audio_b64})
+        except Exception as db_error:
+            print(f"⚠️ Gagal cek cache database: {db_error}")
+
+    # --- 2. SIAPKAN PROMPT GEMINI ---
+    print(f"🤖 Memanggil AI Gemini untuk menjawab {question_key} dari {object_name}...")
 
     # --- 2. SIAPKAN PROMPT GEMINI ---
     prompt = ""
