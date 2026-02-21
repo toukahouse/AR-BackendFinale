@@ -11,6 +11,7 @@ from gtts import gTTS
 from contextlib import closing
 import asyncio
 import edge_tts
+import csv
 
 # Muat variabel dari file .env
 load_dotenv()
@@ -25,14 +26,27 @@ try:
 except Exception as e:
     print(f"❌ Error Gemini API: {e}")
 
+KNOWLEDGE_BASE = {}
+try:
+    # Membaca file CSV saat server pertama kali nyala (biar enteng)
+    with open('Dataset_RAG_English.csv', mode='r', encoding='utf-8') as file:
+        reader = csv.DictReader(file)
+        for row in reader:
+            # Ambil nama bahasa inggrisnya dan jadikan huruf kecil semua
+            nama_inggris = row['English Name'].strip().lower()
+            KNOWLEDGE_BASE[nama_inggris] = {
+                'deskripsi': row['Simple Description (Context for AI)'],
+                'kalimat_lks': row['Example Sentence (from LKS)']
+            }
+    print(f"✅ RAG Berhasil dimuat: {len(KNOWLEDGE_BASE)} materi LKS siap digunakan.")
+except Exception as e:
+    print(f"⚠️ File materi_lks.csv tidak ditemukan atau error: {e}")
+
 # --- FUNGSI HELPER DATABASE ---
+# --- FUNGSI HELPER DATABASE (UPDATE BUAT NEON) ---
 def get_db_connection():
-    return psycopg2.connect(
-        host=os.getenv("DB_HOST"),
-        database=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASS")
-    )
+    # Langsung tembak pakai DATABASE_URL dari .env
+    return psycopg2.connect(os.getenv("DATABASE_URL"))
 
 # --- FUNGSI HELPER TTS KE BASE64 (BARU!) ---
 # --- FUNGSI HELPER TTS NEURAL (EDGE-TTS) ---
@@ -42,7 +56,7 @@ def generate_audio_base64(text):
         # "en-US-AriaNeural" (Cewek dewasa, ramah)
         # "en-US-AnaNeural" (Cewek ceria, cocok buat anak kecil)
         # "en-US-GuyNeural" (Cowok)
-        voice = "en-US-AriaNeural" 
+        voice = "en-CA-ClaraNeural" 
         
         # Karena edge-tts itu asynchronous, kita bungkus pakai asyncio
         async def _generate():
@@ -102,8 +116,8 @@ def identifikasi_objek():
         Fokus HANYA pada objek yang diletakkan DI ATAS marker. 
         Jika ada tulisan "taruh benda di sini" terlihat sangat jelas tanpa tertutup benda, jawab "unknown".
         Abaikan background. Balas HANYA dengan nama objek dalam Bahasa Inggris (tunggal).
-        Contoh: 'book', 'lamp', 'eraser'.
-        dan Use simple words. Add commas (,) frequently to create natural reading pauses."
+        Contoh: 'book', 'lamp', 'eraser'. jika ada mascot guru dan papan tulis di gambar abaikan saja itu hanya 3d model virtual fokus identifikasi objek yang ada di atas marker aja.
+        dan jawab kata bendanya secara umum saja misalnya phone charger menjadi charger, dll"
         """
         
         response = client.models.generate_content(
@@ -153,19 +167,19 @@ def tanya_ai():
 
     # --- CEK CACHE DATABASE ---
     if question_key != "custom":
-        try:
-            with closing(get_db_connection()) as conn:
-                with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute("SELECT * FROM objects WHERE object_name = %s", (object_name,))
-                    db_result = cur.fetchone()
-                    
-                    if db_result and question_key in db_result and db_result[question_key]:
-                        jawaban = db_result[question_key]
-                        # --- TAMBAHAN SUARA DARI CACHE ---
-                        audio_b64 = generate_audio_base64(jawaban)
-                        return jsonify({"status": "sukses", "jawaban": jawaban, "audio_base64": audio_b64})
-        except Exception as db_error:
-            print(f"⚠️ Gagal cek cache: {db_error}")
+        if object_name not in KNOWLEDGE_BASE:
+            try:
+                with closing(get_db_connection()) as conn:
+                    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                        cur.execute("SELECT * FROM objects WHERE object_name = %s", (object_name,))
+                        db_result = cur.fetchone()
+                        
+                        if db_result and question_key in db_result and db_result[question_key]:
+                            # Return dari DB + Suara
+                            audio_b64 = generate_audio_base64(db_result[question_key])
+                            return jsonify({"status": "sukses", "jawaban": db_result[question_key], "audio_base64": audio_b64})
+            except Exception as db_error:
+                print(f"⚠️ Gagal cek cache: {db_error}")
 
     # --- 2. SIAPKAN PROMPT GEMINI ---
     prompt = ""
@@ -176,28 +190,60 @@ def tanya_ai():
         "kalimat": f"Make a simple sentence with '{object_name}'."
     }
 
+# --- CEK APAKAH BENDA ADA DI BUKU LKS (RAG SYSTEM) ---
+    data_lks = None
+    if object_name in KNOWLEDGE_BASE:
+        data_lks = KNOWLEDGE_BASE[object_name]
+
+    # --- LOGIKA PEMBUATAN PROMPT BARU (ANTI-NYONTEK & FULL INGGRIS) ---
+    prompt = ""
+    
+    # Template instruksi dasar (Sapu Jagat)
+# --- PROMPT "STRICT TEACHER" MODE ---
+    base_instruction = (
+        f"You are a strict 4th-grade English teacher. You MUST follow these rules:\n"
+        f"1. ANSWER ONLY IN 1 SHORT SENTENCE. No greeting, no intro.\n"
+        f"2. ALWAYS USE ENGLISH. Never reply in Indonesian under any circumstances.\n"
+        f"3. NEVER say 'According to the book', 'The fact says', or 'Translation:'.\n"
+    )
+
     if question_key == "custom":
         if not custom_question:
             return jsonify({"status": "gagal", "pesan": "Pertanyaan manual kosong"}), 400
-        prompt = (
-            f"Context: You are a helpful teacher explaining a physical object to a 4th-grade student.\n"
-            f"The student is holding an object named '{object_name}'.\n"
-            f"STRICT RULE: Always interpret '{object_name}' as an INANIMATE OBJECT, TOOL, ELECTRONIC DEVICE, or SCHOOL SUPPLY.\n"
-            f"NEVER interpret it as an animal, living creature, or person.\n"
-            f"Examples:\n"
-            f"- If object is 'Mouse', assume it is a Computer Mouse (NOT a rat).\n"
-            f"- If object is 'Bat', assume it is a Baseball Bat (NOT a flying mammal).\n"
-            f"- If object is 'Crane', assume it is a Machine (NOT a bird).\n"
-            f"User's Question: '{custom_question}'\n"
-            f"Instruction: Answer the question based on the definition above. Keep it short and simple (max 2 sentences)."
-            f"Use simple words. Add commas (,) frequently to create natural reading pauses."
-        )
-    elif question_key in question_map:
-# INI KODE BARU
-        if question_key == "ejaan":
-            prompt = f"Spell the word '{object_name}' letter by letter. Separate each letter with a period and a space. Example: B. O. O. K. Only reply with the spelling."
+        
+        context_str = ""
+        if data_lks:
+            context_str = f"RAG Data:\n- Description: {data_lks['deskripsi']}\n- Sentence: {data_lks['kalimat_lks']}\n"
         else:
-            prompt = f"Pertanyaan: '{question_map[question_key]}'. Jawab sangat singkat dalam Bahasa Inggris untuk anak 10 tahun (maks 2 kalimat). Jangan menyapa."
+            context_str = f"RAG Data: None. Use general knowledge about {object_name}.\n"
+        
+        prompt = (f"{base_instruction}"
+                  f"4. INTELLIGENT FALLBACK STRATEGY (CRITICAL):\n"
+                  f"   - STEP A: Check the 'RAG Data' below. Does it contain the answer?\n"
+                  f"   - STEP B: If YES, use the RAG Data to answer.\n"
+                  f"   - STEP C: If NO (e.g., Student asks about Color/Shape/Price but RAG only talks about Function), then IGNORE the RAG Data. Answer using your own general knowledge.\n"
+                  f"   - PROHIBITED PHRASE: You are FORBIDDEN from saying 'The RAG data does not provide information'. If you don't find it in RAG, just answer naturally.\n"
+                  f"{context_str}"
+                  f"Student Question: {custom_question}\n"
+                  f"Short Answer (1 sentence in English):")
+
+    elif question_key == "definisi" or question_key == "fungsi":
+        fact = data_lks['deskripsi'] if data_lks else f"a tool called {object_name}"
+        prompt = (f"{base_instruction}"
+                  f"4. STRICT RAG ADHERENCE: Explain what {object_name} is using ONLY the Fact below. Do not use outside knowledge.\n"
+                  f"Fact: {fact}\n"
+                  f"Instruction: Answer what it is based on the Fact. Translate to English.\n"
+                  f"Short Answer (1 sentence in English):")
+
+    elif question_key == "kalimat":
+        sentence = data_lks['kalimat_lks'] if data_lks else f"I have a {object_name}."
+        prompt = (f"{base_instruction}"
+                  f"4. STRICT RAG ADHERENCE: Translate the Source Sentence below to English perfectly.\n"
+                  f"Source Sentence: {sentence}\n"
+                  f"Short Answer (1 sentence in English):")
+                  
+    elif question_key == "ejaan":
+        prompt = f"Spell the word '{object_name}' letter by letter. Separate each letter with a period. Example: B. O. O. K."
     else:
         return jsonify({"status": "gagal", "pesan": "Kunci pertanyaan salah"}), 400
 
