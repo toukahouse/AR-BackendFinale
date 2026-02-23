@@ -12,6 +12,7 @@ from contextlib import closing
 import asyncio
 import edge_tts
 import csv
+import json
 
 # Muat variabel dari file .env
 load_dotenv()
