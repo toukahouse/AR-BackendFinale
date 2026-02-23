@@ -305,5 +305,92 @@ def tanya_gambar_manual():
     except Exception as e:
         return jsonify({"status": "gagal", "pesan": str(e)}), 500
 
+# --- 1. API UNTUK AMBIL DAFTAR BENDA (BUAT MENU QUIZ) ---
+@app.route('/list-objects', methods=['GET'])
+def list_objects():
+    try:
+        with closing(get_db_connection()) as conn:
+            with conn.cursor() as cur:
+                # Ambil semua nama benda yang pernah di-scan
+                cur.execute("SELECT DISTINCT object_name FROM objects")
+                rows = cur.fetchall()
+                # Ubah jadi list simple
+                object_list = [row[0] for row in rows] 
+                return jsonify({"status": "sukses", "objects": object_list})
+    except Exception as e:
+        return jsonify({"status": "gagal", "pesan": str(e)}), 500
+
+# --- 2. API UNTUK GENERATE / AMBIL SOAL QUIZ ---
+@app.route('/generate-quiz', methods=['POST'])
+def generate_quiz():
+    data = request.get_json()
+    if not data or 'object_name' not in data:
+        return jsonify({"status": "gagal", "pesan": "Data tidak lengkap"}), 400
+
+    object_name = data['object_name'].lower()
+
+    # A. CEK DATABASE DULU (SIAPA TAU UDAH PERNAH DIBIKIN)
+    try:
+        with closing(get_db_connection()) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT questions_json FROM quizzes WHERE object_name = %s", (object_name,))
+                result = cur.fetchone()
+                
+                if result:
+                    print(f"✅ Quiz untuk {object_name} diambil dari DATABASE NEON!")
+                    return jsonify({"status": "sukses", "data": json.loads(result[0])})
+    except Exception as e:
+        print(f"⚠️ Gagal cek cache database quiz: {e}")
+
+    # B. KALAU BELUM ADA, MINTA GEMINI BUATKAN
+    print(f"🤖 Meminta Gemini membuat 10 Soal Quiz untuk: {object_name}...")
+    
+    # Prompt super ketat agar output murni JSON
+    prompt = (
+        f"Create a quiz about '{object_name}' for 4th-grade students.\n"
+        f"Generate exactly 10 multiple-choice questions.\n"
+        f"STRICT OUTPUT FORMAT: Return ONLY a raw JSON array. Do not use Markdown code blocks. Do not allow intro/outro text.\n"
+        f"Format Structure:\n"
+        f"[\n"
+        f"  {{ \"question\": \"Question text here?\", \"options\": [\"A. Option1\", \"B. Option2\", \"C. Option3\", \"D. Option4\"], \"correct_index\": 0 }},\n"
+        f"  ... (repeat for 10 items)\n"
+        f"]\n"
+        f"Rules:\n"
+        f"1. Language: English.\n"
+        f"2. 'correct_index' is 0 for A, 1 for B, 2 for C, 3 for D.\n"
+        f"3. Make questions fun and related to the object's function, shape, or definition."
+    )
+
+    try:
+        # Gunakan model Gemini yang sama seperti yang kamu pakai di app.py
+        response = client.models.generate_content(model="gemini-2.5-flash-lite", contents=prompt)
+        raw_text = (response.text or "").strip()
+        
+        # Bersihkan "sampah" format dari Gemini (kalau dia bandel ngasih ```json)
+        if raw_text.startswith("```"):
+            raw_text = raw_text.replace("```json", "").replace("```", "").strip()
+
+        quiz_data = json.loads(raw_text) # Ubah teks jadi JSON
+
+        # C. SIMPAN KE DATABASE (Biar besok gak mikir lagi)
+        try:
+            with closing(get_db_connection()) as conn:
+                with conn.cursor() as cur:
+                    json_str = json.dumps(quiz_data)
+                    cur.execute(
+                        "INSERT INTO quizzes (object_name, questions_json) VALUES (%s, %s) ON CONFLICT (object_name) DO NOTHING",
+                        (object_name, json_str)
+                    )
+                    conn.commit()
+                    print(f"💾 Quiz {object_name} berhasil disimpan ke Database!")
+        except Exception as db_e:
+            print(f"⚠️ Gagal simpan quiz ke DB: {db_e}")
+
+        return jsonify({"status": "sukses", "data": quiz_data})
+
+    except Exception as e:
+        print(f"❌ Error API Quiz: {e}")
+        return jsonify({"status": "gagal", "pesan": str(e)}), 500
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
