@@ -322,6 +322,7 @@ def list_objects():
         return jsonify({"status": "gagal", "pesan": str(e)}), 500
 
 # --- 2. API UNTUK GENERATE / AMBIL SOAL QUIZ ---
+# --- 2. API UNTUK GENERATE / AMBIL SOAL QUIZ ---
 @app.route('/generate-quiz', methods=['POST'])
 def generate_quiz():
     data = request.get_json()
@@ -346,24 +347,24 @@ def generate_quiz():
     # B. KALAU BELUM ADA, MINTA GEMINI BUATKAN
     print(f"🤖 Meminta Gemini membuat 10 Soal Quiz untuk: {object_name}...")
     
-    # Prompt super ketat agar output murni JSON
+    # --- PROMPT BARU YANG LEBIH KETAT DAN SUPER GAMPANG ---
     prompt = (
-        f"Create a quiz about '{object_name}' for 4th-grade students.\n"
-        f"Generate exactly 10 multiple-choice questions.\n"
-        f"STRICT OUTPUT FORMAT: Return ONLY a raw JSON array. Do not use Markdown code blocks. Do not allow intro/outro text.\n"
+        f"Create a multiple-choice quiz about '{object_name}' for 4th-grade elementary students in Indonesia who are beginners in English.\n"
+        f"Generate exactly 10 questions.\n"
+        f"STRICT OUTPUT FORMAT: Return ONLY a raw JSON array. Do not use Markdown blocks (```json).\n"
         f"Format Structure:\n"
         f"[\n"
-        f"  {{ \"question\": \"Question text here?\", \"options\": [\"A. Option1\", \"B. Option2\", \"C. Option3\", \"D. Option4\"], \"correct_index\": 0 }},\n"
-        f"  ... (repeat for 10 items)\n"
+        f"  {{ \"question\": \"Very simple question?\", \"options\": [\"A) Option1\", \"B) Option2\", \"C) Option3\", \"D) Option4\"], \"correct_index\": 0 }}\n"
         f"]\n"
-        f"Rules:\n"
-        f"1. Language: English.\n"
-        f"2. 'correct_index' is 0 for A, 1 for B, 2 for C, 3 for D.\n"
-        f"3. Make questions fun and related to the object's function, shape, or definition."
+        f"Rules you MUST follow:\n"
+        f"1. EXTREMELY SIMPLE ENGLISH: Use basic vocabulary. Max 8 words per question. Example: 'What color is the book?' or 'What is it used for?'\n"
+        f"2. SHORT OPTIONS: Options must be very short (1 to 4 words max).\n"
+        f"3. MANDATORY PREFIX: Every single option string MUST start with exactly 'A) ', 'B) ', 'C) ', and 'D) '.\n"
+        f"4. 'correct_index' is an integer: 0 for A, 1 for B, 2 for C, 3 for D.\n"
+        f"5. Make questions very obvious and easy for 10-year-olds."
     )
 
     try:
-        # Gunakan model Gemini yang sama seperti yang kamu pakai di app.py
         response = client.models.generate_content(model="gemini-2.5-flash-lite", contents=prompt)
         raw_text = (response.text or "").strip()
         
