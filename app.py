@@ -173,7 +173,7 @@ def tanya_ai():
     if not data or 'object_name' not in data or 'question_key' not in data:
         return jsonify({"status": "gagal", "pesan": "Data tidak lengkap"}), 400
 
-    object_name = data['object_name']
+    object_name = str(data['object_name']).strip().lower()
     question_key = data['question_key']
     custom_question = data.get('custom_question', '')
 
@@ -197,14 +197,9 @@ def tanya_ai():
     # --- 2. SIAPKAN PROMPT GEMINI ---
     print(f"🤖 Memanggil AI Gemini untuk menjawab {question_key} dari {object_name}...")
 
-    # --- 2. SIAPKAN PROMPT GEMINI ---
+    # --- 2. SIAPKAN PROMPT / JAWABAN ---
     prompt = ""
-    question_map = {
-        "definisi": f"What is a {object_name}?",
-        "fungsi": f"What is a {object_name} for?",
-        "ejaan": f"How do you spell '{object_name}'?",
-        "kalimat": f"Make a simple sentence with '{object_name}'."
-    }
+    jawaban_ai = ""
 
 # --- CEK APAKAH BENDA ADA DI BUKU LKS (RAG SYSTEM) ---
     data_lks = None
@@ -226,45 +221,69 @@ def tanya_ai():
         context_str = f"Fact about {object_name}: {data_lks['deskripsi']}\n" if data_lks else ""
         
         prompt = (f"{base_instruction}"
-                  f"4. If the 'Fact' below answers the student's question, use it. If the 'Fact' is empty or does NOT answer the question (e.g., they ask about color, shape, price, etc.), IGNORE the fact and use your own general knowledge to answer.\n"
-                  f"5. IMPORTANT: Give a simple, direct answer based on what a general '{object_name}' looks like or does.\n"
+                  f"4. The student must ask only about '{object_name}'.\n"
+                  f"5. If the question is unrelated to '{object_name}' (for example politics, celebrities, math, or random world facts), reply EXACTLY: 'Sorry, I can only answer questions about {object_name}.'\n"
+                  f"6. If the question is related to '{object_name}', answer briefly. If the Fact helps, use it. If the Fact is not enough, you may use your own general knowledge about '{object_name}'.\n"
                   f"{context_str}"
                   f"Student Question: {custom_question}\n"
                   f"Teacher's Answer (1 short sentence):")
 
     elif question_key == "definisi":
-        # What is this? -> Fokus sebut nama benda & wujud fisiknya
-        fact = data_lks['deskripsi'] if data_lks else f"A common object called {object_name}"
-        prompt = (f"{base_instruction}"
-                  f"4. The student asks 'What is this?'.\n"
-                  f"5. Answer by stating the object's name AND describing its general physical appearance (shape/color/material).\n"
-                  f"Fact for inspiration: {fact}\n"
-                  f"Teacher's Answer (Example: 'This is a book, it has many paper pages.'):")
+        # Jika objek ada di RAG, jawaban wajib mengacu pada fact RAG.
+        if data_lks:
+            fact = data_lks['deskripsi']
+            prompt = (f"{base_instruction}"
+                      f"4. The student asks 'What is this?'.\n"
+                      f"5. You MUST answer only from the Fact below. Do not add outside information.\n"
+                      f"6. If the Fact is insufficient, reply exactly: 'I only know basic info about this object.'\n"
+                      f"Fact: {fact}\n"
+                      f"Teacher's Answer:")
+        else:
+            prompt = (f"{base_instruction}"
+                      f"4. The student asks 'What is this?'.\n"
+                      f"5. This object is not in the RAG dataset, so use your general knowledge.\n"
+                      f"Teacher's Answer:")
 
     elif question_key == "fungsi":
-        # What is it for? -> Fokus ke kegunaan benda
-        fact = data_lks['deskripsi'] if data_lks else f"It is used for general purpose."
-        prompt = (f"{base_instruction}"
-                  f"4. The student asks 'What is it for?'.\n"
-                  f"5. Answer by explaining the function or how to use the {object_name}.\n"
-                  f"Fact for inspiration: {fact}\n"
-                  f"Teacher's Answer (Example: 'It is used for reading and studying.'):")
+        if data_lks:
+            fact = data_lks['deskripsi']
+            prompt = (f"{base_instruction}"
+                      f"4. The student asks 'What is it for?'.\n"
+                      f"5. You MUST answer only from the Fact below. Do not add outside information.\n"
+                      f"6. If the Fact is insufficient, reply exactly: 'I only know basic info about this object.'\n"
+                      f"Fact: {fact}\n"
+                      f"Teacher's Answer:")
+        else:
+            prompt = (f"{base_instruction}"
+                      f"4. The student asks 'What is it for?'.\n"
+                      f"5. This object is not in the RAG dataset, so use your general knowledge.\n"
+                      f"Teacher's Answer:")
 
     elif question_key == "kalimat":
-        sentence = data_lks['kalimat_lks'] if data_lks else f"I have a {object_name}."
-        prompt = (f"{base_instruction}"
-                  f"4. Make a simple 4th-grade English sentence using the word '{object_name}'.\n"
-                  f"Reference sentence for inspiration: {sentence}\n"
-                  f"Teacher's Answer:")
+        # Untuk kalimat, jika ada di RAG pakai data LKS langsung biar mutlak.
+        if data_lks and data_lks.get('kalimat_lks'):
+            jawaban_ai = data_lks['kalimat_lks'].strip()
+        else:
+            prompt = (f"{base_instruction}"
+                      f"4. Make a simple 4th-grade English sentence using the word '{object_name}'.\n"
+                      f"Teacher's Answer:")
                   
     elif question_key == "ejaan":
-        prompt = f"Spell the word '{object_name}' letter by letter. Separate each letter with a period. Example for 'BOOK': B. O. O. K."
+        letters = [ch.upper() for ch in object_name if ch.isalpha()]
+        if letters:
+            jawaban_ai = " ".join([f"{letter}." for letter in letters])
+        else:
+            prompt = f"Spell the word '{object_name}' letter by letter. Separate each letter with a period. Example for 'BOOK': B. O. O. K."
     else:
         return jsonify({"status": "gagal", "pesan": "Kunci pertanyaan salah"}), 400
 
     try:
-        response = call_gemini(contents=prompt, thinking_level="MINIMAL")
-        jawaban_ai = (response.text or "").strip()
+        if not jawaban_ai:
+            response = call_gemini(contents=prompt, thinking_level="MINIMAL")
+            jawaban_ai = (response.text or "").strip()
+
+        if not jawaban_ai:
+            jawaban_ai = "I only know basic info about this object."
 
         # --- TAMBAHAN SUARA JAWABAN GEMINI ---
         audio_b64 = generate_audio_base64(jawaban_ai)
