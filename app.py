@@ -51,7 +51,8 @@ try:
             nama_inggris = row['English Name'].strip().lower()
             KNOWLEDGE_BASE[nama_inggris] = {
                 'deskripsi': row['Simple Description (Context for AI)'],
-                'kalimat_lks': row['Example Sentence (from LKS)']
+                'kalimat_lks': row['Example Sentence (from LKS)'],
+                'qna_lks': row.get('Asking and Giving Information', '')
             }
     print(f"✅ RAG Berhasil dimuat: {len(KNOWLEDGE_BASE)} materi LKS siap digunakan.")
 except Exception as e:
@@ -358,7 +359,7 @@ def generate_quiz():
     if not data or 'object_name' not in data:
         return jsonify({"status": "gagal", "pesan": "Data tidak lengkap"}), 400
 
-    object_name = data['object_name'].lower()
+    object_name = str(data['object_name']).strip().lower()
 
     # A. CEK DATABASE DULU (SIAPA TAU UDAH PERNAH DIBIKIN)
     try:
@@ -375,34 +376,125 @@ def generate_quiz():
 
     # B. KALAU BELUM ADA, MINTA GEMINI BUATKAN
     print(f"🤖 Meminta Gemini membuat 10 Soal Quiz untuk: {object_name}...")
-    
-    # --- PROMPT BARU YANG LEBIH KETAT DAN SUPER GAMPANG ---
-    prompt = (
-        f"Create a text-only multiple-choice quiz about '{object_name}' for 4th-grade elementary students in Indonesia who are beginners in English.\n"
-        f"Generate exactly 10 questions.\n"
-        f"STRICT OUTPUT FORMAT: Return ONLY a raw JSON array. Do not use Markdown blocks (```json).\n"
-        f"Format Structure:\n"
-        f"[\n"
-        f"  {{ \"question\": \"Where do you usually find a {object_name}?\", \"options\": [\"A) Option1\", \"B) Option2\", \"C) Option3\", \"D) Option4\"], \"correct_index\": 0 }}\n"
-        f"]\n"
-        f"Rules you MUST follow:\n"
-        f"1. NO IMAGE REFERENCES (CRITICAL): The quiz is TEXT-ONLY. NEVER use phrases like 'in the picture', 'look at this image', 'what color is this', or 'in this photo'.\n"
-        f"2. QUESTION TYPES: Make logical questions based on function or location. Examples: 'Where do you put a {object_name}?', 'We use a {object_name} to...', or 'What is inside a {object_name}?'.\n"
-        f"3. EXTREMELY SIMPLE ENGLISH: Use basic vocabulary. Max 10 words per question.\n"
-        f"4. SHORT OPTIONS: Options must be very short (1 to 4 words max).\n"
-        f"5. MANDATORY PREFIX: Every single option string MUST start with exactly 'A) ', 'B) ', 'C) ', and 'D) '.\n"
-        f"6. 'correct_index' is an integer: 0 for A, 1 for B, 2 for C, 3 for D."
-    )
+
+    rag_data = KNOWLEDGE_BASE.get(object_name)
+    rag_context = ""
+    if rag_data:
+        rag_context = (
+            f"RAG Fact - Description: {rag_data.get('deskripsi', '')}\n"
+            f"RAG Fact - Example Sentence: {rag_data.get('kalimat_lks', '')}\n"
+            f"RAG Fact - QnA: {rag_data.get('qna_lks', '')}\n"
+        )
+
+    def _build_quiz_prompt(excluded_questions=None):
+        excluded_questions = excluded_questions or []
+        excluded_block = ""
+        if excluded_questions:
+            excluded_block = (
+                "Do not generate any of these question texts again:\n"
+                + "\n".join([f"- {q}" for q in excluded_questions])
+                + "\n"
+            )
+
+        rag_rules = ""
+        if rag_data:
+            rag_rules = (
+                "RAG POLICY:\n"
+                "- Use the RAG facts below as primary source.\n"
+                "- At least 6 out of 10 questions must be directly answerable from these RAG facts.\n"
+                "- The remaining questions may use simple common knowledge, but still must stay about the same object.\n"
+                "- Never contradict RAG facts.\n"
+                f"{rag_context}\n"
+            )
+        else:
+            rag_rules = (
+                "RAG POLICY:\n"
+                "- This object is not found in RAG dataset.\n"
+                "- Use simple, safe general knowledge about the object.\n"
+                "- Keep quality and difficulty at 4th-grade beginner level.\n"
+            )
+
+        return (
+            f"Create a text-only multiple-choice quiz about '{object_name}' for 4th-grade elementary students in Indonesia who are beginners in English.\n"
+            f"Generate exactly 10 questions.\n"
+            f"STRICT OUTPUT FORMAT: Return ONLY a raw JSON array. Do not use Markdown blocks (```json).\n"
+            f"Format Structure:\n"
+            f"[\n"
+            f"  {{ \"question\": \"Where do you usually find a {object_name}?\", \"options\": [\"A) Option1\", \"B) Option2\", \"C) Option3\", \"D) Option4\"], \"correct_index\": 0 }}\n"
+            f"]\n"
+            f"Rules you MUST follow:\n"
+            f"1. NO IMAGE REFERENCES: The quiz is TEXT-ONLY.\n"
+            f"2. UNIQUE QUESTIONS: All 10 question texts must be different in meaning and wording.\n"
+            f"3. EXTREMELY SIMPLE ENGLISH: Max 10 words per question.\n"
+            f"4. SHORT OPTIONS: Each option is 1 to 4 words only.\n"
+            f"5. MANDATORY PREFIX: options must start with exactly 'A) ', 'B) ', 'C) ', 'D) '.\n"
+            f"6. correct_index is integer 0..3 matching correct option.\n"
+            f"7. Keep questions answerable by kids (no tricky/ambiguous wording).\n"
+            f"{rag_rules}"
+            f"{excluded_block}"
+        )
+
+    def _normalize_question_text(text):
+        return " ".join(str(text).strip().lower().split())
+
+    def _validate_quiz_payload(items):
+        if not isinstance(items, list):
+            return False
+        if len(items) != 10:
+            return False
+
+        seen_questions = set()
+        for item in items:
+            if not isinstance(item, dict):
+                return False
+            if "question" not in item or "options" not in item or "correct_index" not in item:
+                return False
+
+            q_text = _normalize_question_text(item["question"])
+            if not q_text or q_text in seen_questions:
+                return False
+            seen_questions.add(q_text)
+
+            options = item["options"]
+            if not isinstance(options, list) or len(options) != 4:
+                return False
+            expected_prefix = ["A) ", "B) ", "C) ", "D) "]
+            for idx, opt in enumerate(options):
+                if not isinstance(opt, str) or not opt.startswith(expected_prefix[idx]):
+                    return False
+
+            correct_index = item["correct_index"]
+            if not isinstance(correct_index, int) or correct_index < 0 or correct_index > 3:
+                return False
+
+        return True
 
     try:
-        response = call_gemini(contents=prompt, thinking_level="HIGH")
-        raw_text = (response.text or "").strip()
-        
-        # Bersihkan "sampah" format dari Gemini (kalau dia bandel ngasih ```json)
-        if raw_text.startswith("```"):
-            raw_text = raw_text.replace("```json", "").replace("```", "").strip()
+        quiz_data = None
+        excluded_questions = []
 
-        quiz_data = json.loads(raw_text) # Ubah teks jadi JSON
+        for _ in range(3):
+            prompt = _build_quiz_prompt(excluded_questions)
+            response = call_gemini(contents=prompt, thinking_level="HIGH")
+            raw_text = (response.text or "").strip()
+
+            # Bersihkan "sampah" format dari Gemini (kalau dia bandel ngasih ```json)
+            if raw_text.startswith("```"):
+                raw_text = raw_text.replace("```json", "").replace("```", "").strip()
+
+            parsed = json.loads(raw_text)
+            if _validate_quiz_payload(parsed):
+                quiz_data = parsed
+                break
+
+            if isinstance(parsed, list):
+                excluded_questions = [str(item.get("question", "")).strip() for item in parsed if isinstance(item, dict)]
+
+        if not quiz_data:
+            return jsonify({
+                "status": "gagal",
+                "pesan": "AI gagal membuat quiz valid dan unik. Coba lagi."
+            }), 500
 
         # C. SIMPAN KE DATABASE (Biar besok gak mikir lagi)
         try:
