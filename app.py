@@ -41,6 +41,58 @@ def call_gemini(contents, thinking_level="MINIMAL"):
         config=config,
     )
 
+
+def is_related_custom_question(object_name, question_text):
+    obj = str(object_name or "").strip().lower()
+    q = " ".join(str(question_text or "").strip().lower().split())
+    if not obj or not q:
+        return False
+
+    # Strong allow: explicit object mention.
+    if obj in q:
+        return True
+
+    # Allow partial mention for multi-word objects, e.g. "remote" for "remote control".
+    obj_parts = [p for p in obj.replace("-", " ").split() if len(p) >= 4]
+    if any(part in q for part in obj_parts):
+        return True
+
+    intent_keywords = [
+        "shape", "color", "size", "material", "function", "use", "used", "price", "buy", "store", "where",
+        "bentuk", "warna", "ukuran", "bahan", "fungsi", "kegunaan", "harga", "beli", "toko", "dimana", "di mana"
+    ]
+    contextual_refs = ["it", "this", "that", "this object", "benda ini", "itu", "ini"]
+    if any(k in q for k in intent_keywords) and any(r in q for r in contextual_refs):
+        return True
+
+    # Strong block for obvious out-of-topic world questions when object not mentioned.
+    off_topic = [
+        "president", "prime minister", "chancellor", "germany", "jerman", "celebrity", "actor", "football", "math",
+        "politik", "pemerintah", "negara", "ibukota", "capital city", "planet", "history", "sejarah"
+    ]
+    if any(k in q for k in off_topic):
+        return False
+
+    # Fallback semantic check with Gemini in bilingual mode.
+    classify_prompt = (
+        "You are a classifier.\n"
+        "Task: Decide if the user question is related to the scanned object.\n"
+        "Object: " + obj + "\n"
+        "Question: " + q + "\n"
+        "Rules:\n"
+        "- Related if asking attributes, function, usage, place to buy, care, parts, examples, spelling, or sentence about that object.\n"
+        "- Question can be in English or Indonesian.\n"
+        "- Unrelated if about politics, celebrities, random world facts, or another object.\n"
+        "Output exactly one word: RELATED or UNRELATED."
+    )
+
+    try:
+        resp = call_gemini(contents=classify_prompt, thinking_level="MINIMAL")
+        label = (resp.text or "").strip().upper()
+        return label.startswith("RELATED")
+    except Exception:
+        return False
+
 KNOWLEDGE_BASE = {}
 try:
     # Membaca file CSV saat server pertama kali nyala (biar enteng)
@@ -218,13 +270,17 @@ def tanya_ai():
     if question_key == "custom":
         if not custom_question:
             return jsonify({"status": "gagal", "pesan": "Pertanyaan manual kosong"}), 400
+
+        if not is_related_custom_question(object_name, custom_question):
+            blocked_answer = f"Sorry, I can only answer questions about {object_name}."
+            audio_b64 = generate_audio_base64(blocked_answer)
+            return jsonify({"status": "sukses", "jawaban": blocked_answer, "audio_base64": audio_b64})
         
         context_str = f"Fact about {object_name}: {data_lks['deskripsi']}\n" if data_lks else ""
         
         prompt = (f"{base_instruction}"
-                  f"4. The student must ask only about '{object_name}'.\n"
-                  f"5. If the question is unrelated to '{object_name}' (for example politics, celebrities, math, or random world facts), reply EXACTLY: 'Sorry, I can only answer questions about {object_name}.'\n"
-                  f"6. If the question is related to '{object_name}', answer briefly. If the Fact helps, use it. If the Fact is not enough, you may use your own general knowledge about '{object_name}'.\n"
+                  f"4. The student question is already confirmed related to '{object_name}'.\n"
+                  f"5. Answer briefly. If the Fact helps, use it. If the Fact is not enough, you may use your own general knowledge about '{object_name}'.\n"
                   f"{context_str}"
                   f"Student Question: {custom_question}\n"
                   f"Teacher's Answer (1 short sentence):")
@@ -360,19 +416,21 @@ def generate_quiz():
         return jsonify({"status": "gagal", "pesan": "Data tidak lengkap"}), 400
 
     object_name = str(data['object_name']).strip().lower()
+    force_regenerate = bool(data.get('force_regenerate', False))
 
     # A. CEK DATABASE DULU (SIAPA TAU UDAH PERNAH DIBIKIN)
-    try:
-        with closing(get_db_connection()) as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT questions_json FROM quizzes WHERE object_name = %s", (object_name,))
-                result = cur.fetchone()
-                
-                if result:
-                    print(f"✅ Quiz untuk {object_name} diambil dari DATABASE NEON!")
-                    return jsonify({"status": "sukses", "data": json.loads(result[0])})
-    except Exception as e:
-        print(f"⚠️ Gagal cek cache database quiz: {e}")
+    if not force_regenerate:
+        try:
+            with closing(get_db_connection()) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT questions_json FROM quizzes WHERE object_name = %s", (object_name,))
+                    result = cur.fetchone()
+                    
+                    if result:
+                        print(f"✅ Quiz untuk {object_name} diambil dari DATABASE NEON!")
+                        return jsonify({"status": "sukses", "data": json.loads(result[0])})
+        except Exception as e:
+            print(f"⚠️ Gagal cek cache database quiz: {e}")
 
     # B. KALAU BELUM ADA, MINTA GEMINI BUATKAN
     print(f"🤖 Meminta Gemini membuat 10 Soal Quiz untuk: {object_name}...")
@@ -402,6 +460,7 @@ def generate_quiz():
                 "RAG POLICY:\n"
                 "- Use the RAG facts below as primary source.\n"
                 "- At least 6 out of 10 questions must be directly answerable from these RAG facts.\n"
+                "- If RAG Fact - QnA exists, create at least 2 questions inspired by that QnA pattern (especially location/existence).\n"
                 "- The remaining questions may use simple common knowledge, but still must stay about the same object.\n"
                 "- Never contradict RAG facts.\n"
                 f"{rag_context}\n"
@@ -482,7 +541,12 @@ def generate_quiz():
             if raw_text.startswith("```"):
                 raw_text = raw_text.replace("```json", "").replace("```", "").strip()
 
-            parsed = json.loads(raw_text)
+            try:
+                parsed = json.loads(raw_text)
+            except Exception:
+                excluded_questions = []
+                continue
+
             if _validate_quiz_payload(parsed):
                 quiz_data = parsed
                 break
