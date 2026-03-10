@@ -4,6 +4,7 @@ import base64
 from flask import Flask, request, jsonify, send_file
 from dotenv import load_dotenv
 from google import genai 
+from google.genai import types
 from PIL import Image
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -19,6 +20,8 @@ load_dotenv()
 
 app = Flask(__name__)
 
+GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
+
 # --- INISIALISASI GEMINI ---
 client = None
 try:
@@ -26,6 +29,17 @@ try:
     print("✅ Koneksi Gemini API berhasil.")
 except Exception as e:
     print(f"❌ Error Gemini API: {e}")
+
+
+def call_gemini(contents, thinking_level="MINIMAL"):
+    config = types.GenerateContentConfig(
+        thinking_config=types.ThinkingConfig(thinking_level=thinking_level)
+    )
+    return client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=contents,
+        config=config,
+    )
 
 KNOWLEDGE_BASE = {}
 try:
@@ -121,10 +135,7 @@ def identifikasi_objek():
         dan jawab kata bendanya secara umum saja misalnya phone charger menjadi charger, dll"
         """
         
-        response = client.models.generate_content(
-            model="gemini-2.5-flash-lite",
-            contents=[image, prompt],
-        )
+        response = call_gemini(contents=[image, prompt], thinking_level="MINIMAL")
         object_name = (response.text or "").strip().lower()
 
         audio_b64 = "" # Variabel kosong buat suara
@@ -252,7 +263,7 @@ def tanya_ai():
         return jsonify({"status": "gagal", "pesan": "Kunci pertanyaan salah"}), 400
 
     try:
-        response = client.models.generate_content(model="gemini-2.5-flash-lite", contents=prompt)
+        response = call_gemini(contents=prompt, thinking_level="MINIMAL")
         jawaban_ai = (response.text or "").strip()
 
         # --- TAMBAHAN SUARA JAWABAN GEMINI ---
@@ -290,7 +301,7 @@ def tanya_gambar_manual():
         Jawab dengan Bahasa Inggris yang SANGAT SINGKAT (cocok untuk anak 10 tahun).
         Jangan menyapa, langsung jawabannya. Use simple words. Add commas (,) frequently to create natural reading pauses."
         """
-        response = client.models.generate_content(model="gemini-2.5-flash-lite", contents=[image, prompt])
+        response = call_gemini(contents=[image, prompt], thinking_level="MINIMAL")
         jawaban_ai_text = (response.text or "").strip()
 
         if not jawaban_ai_text:
@@ -365,7 +376,7 @@ def generate_quiz():
     )
 
     try:
-        response = client.models.generate_content(model="gemini-2.5-flash-lite", contents=prompt)
+        response = call_gemini(contents=prompt, thinking_level="HIGH")
         raw_text = (response.text or "").strip()
         
         # Bersihkan "sampah" format dari Gemini (kalau dia bandel ngasih ```json)
