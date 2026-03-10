@@ -30,7 +30,7 @@ except Exception as e:
 KNOWLEDGE_BASE = {}
 try:
     # Membaca file CSV saat server pertama kali nyala (biar enteng)
-    with open('Dataset_RAG_English.csv', mode='r', encoding='utf-8') as file:
+    with open('Dataset_RAG_Englishv2.csv', mode='r', encoding='utf-8') as file:
         reader = csv.DictReader(file)
         for row in reader:
             # Ambil nama bahasa inggrisnya dan jadikan huruf kecil semua
@@ -200,55 +200,54 @@ def tanya_ai():
     if object_name in KNOWLEDGE_BASE:
         data_lks = KNOWLEDGE_BASE[object_name]
 
-    # --- LOGIKA PEMBUATAN PROMPT BARU (ANTI-NYONTEK & FULL INGGRIS) ---
-    prompt = ""
-    
-    # Template instruksi dasar (Sapu Jagat)
-# --- PROMPT "STRICT TEACHER" MODE ---
+    # --- PROMPT "STRICT TEACHER" MODE (SUPER NATURAL) ---
     base_instruction = (
-        f"You are a strict 4th-grade English teacher. You MUST follow these rules:\n"
-        f"1. ANSWER ONLY IN 1 SHORT SENTENCE. No greeting, no intro.\n"
-        f"2. ALWAYS USE ENGLISH. Never reply in Indonesian under any circumstances.\n"
-        f"3. NEVER say 'According to the book', 'The fact says', or 'Translation:'.\n"
+        f"You are a friendly but strict 4th-grade English teacher.\n"
+        f"1. ANSWER ONLY IN 1 SHORT SENTENCE (maximum 10 words). No greeting, no intro.\n"
+        f"2. ALWAYS USE ENGLISH. Never reply in Indonesian.\n"
+        f"3. NEVER mention 'According to the data', 'Database', 'The text says', or 'I don't have information'. Just answer directly like a real human teacher.\n"
     )
 
     if question_key == "custom":
         if not custom_question:
             return jsonify({"status": "gagal", "pesan": "Pertanyaan manual kosong"}), 400
         
-        context_str = ""
-        if data_lks:
-            context_str = f"RAG Data:\n- Description: {data_lks['deskripsi']}\n- Sentence: {data_lks['kalimat_lks']}\n"
-        else:
-            context_str = f"RAG Data: None. Use general knowledge about {object_name}.\n"
+        context_str = f"Fact about {object_name}: {data_lks['deskripsi']}\n" if data_lks else ""
         
         prompt = (f"{base_instruction}"
-                  f"4. INTELLIGENT FALLBACK STRATEGY (CRITICAL):\n"
-                  f"   - STEP A: Check the 'RAG Data' below. Does it contain the answer?\n"
-                  f"   - STEP B: If YES, use the RAG Data to answer.\n"
-                  f"   - STEP C: If NO (e.g., Student asks about Color/Shape/Price but RAG only talks about Function), then IGNORE the RAG Data. Answer using your own general knowledge.\n"
-                  f"   - PROHIBITED PHRASE: You are FORBIDDEN from saying 'The RAG data does not provide information'. If you don't find it in RAG, just answer naturally.\n"
+                  f"4. If the 'Fact' below answers the student's question, use it. If the 'Fact' is empty or does NOT answer the question (e.g., they ask about color, shape, price, etc.), IGNORE the fact and use your own general knowledge to answer.\n"
+                  f"5. IMPORTANT: Give a simple, direct answer based on what a general '{object_name}' looks like or does.\n"
                   f"{context_str}"
                   f"Student Question: {custom_question}\n"
-                  f"Short Answer (1 sentence in English):")
+                  f"Teacher's Answer (1 short sentence):")
 
-    elif question_key == "definisi" or question_key == "fungsi":
-        fact = data_lks['deskripsi'] if data_lks else f"a tool called {object_name}"
+    elif question_key == "definisi":
+        # What is this? -> Fokus sebut nama benda & wujud fisiknya
+        fact = data_lks['deskripsi'] if data_lks else f"A common object called {object_name}"
         prompt = (f"{base_instruction}"
-                  f"4. STRICT RAG ADHERENCE: Explain what {object_name} is using ONLY the Fact below. Do not use outside knowledge.\n"
-                  f"Fact: {fact}\n"
-                  f"Instruction: Answer what it is based on the Fact. Translate to English.\n"
-                  f"Short Answer (1 sentence in English):")
+                  f"4. The student asks 'What is this?'.\n"
+                  f"5. Answer by stating the object's name AND describing its general physical appearance (shape/color/material).\n"
+                  f"Fact for inspiration: {fact}\n"
+                  f"Teacher's Answer (Example: 'This is a book, it has many paper pages.'):")
+
+    elif question_key == "fungsi":
+        # What is it for? -> Fokus ke kegunaan benda
+        fact = data_lks['deskripsi'] if data_lks else f"It is used for general purpose."
+        prompt = (f"{base_instruction}"
+                  f"4. The student asks 'What is it for?'.\n"
+                  f"5. Answer by explaining the function or how to use the {object_name}.\n"
+                  f"Fact for inspiration: {fact}\n"
+                  f"Teacher's Answer (Example: 'It is used for reading and studying.'):")
 
     elif question_key == "kalimat":
         sentence = data_lks['kalimat_lks'] if data_lks else f"I have a {object_name}."
         prompt = (f"{base_instruction}"
-                  f"4. STRICT RAG ADHERENCE: Translate the Source Sentence below to English perfectly.\n"
-                  f"Source Sentence: {sentence}\n"
-                  f"Short Answer (1 sentence in English):")
+                  f"4. Make a simple 4th-grade English sentence using the word '{object_name}'.\n"
+                  f"Reference sentence for inspiration: {sentence}\n"
+                  f"Teacher's Answer:")
                   
     elif question_key == "ejaan":
-        prompt = f"Spell the word '{object_name}' letter by letter. Separate each letter with a period. Example: B. O. O. K."
+        prompt = f"Spell the word '{object_name}' letter by letter. Separate each letter with a period. Example for 'BOOK': B. O. O. K."
     else:
         return jsonify({"status": "gagal", "pesan": "Kunci pertanyaan salah"}), 400
 
