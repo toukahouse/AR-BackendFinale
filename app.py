@@ -349,19 +349,20 @@ def generate_quiz():
     
     # --- PROMPT BARU YANG LEBIH KETAT DAN SUPER GAMPANG ---
     prompt = (
-        f"Create a multiple-choice quiz about '{object_name}' for 4th-grade elementary students in Indonesia who are beginners in English.\n"
+        f"Create a text-only multiple-choice quiz about '{object_name}' for 4th-grade elementary students in Indonesia who are beginners in English.\n"
         f"Generate exactly 10 questions.\n"
         f"STRICT OUTPUT FORMAT: Return ONLY a raw JSON array. Do not use Markdown blocks (```json).\n"
         f"Format Structure:\n"
         f"[\n"
-        f"  {{ \"question\": \"Very simple question?\", \"options\": [\"A) Option1\", \"B) Option2\", \"C) Option3\", \"D) Option4\"], \"correct_index\": 0 }}\n"
+        f"  {{ \"question\": \"Where do you usually find a {object_name}?\", \"options\": [\"A) Option1\", \"B) Option2\", \"C) Option3\", \"D) Option4\"], \"correct_index\": 0 }}\n"
         f"]\n"
         f"Rules you MUST follow:\n"
-        f"1. EXTREMELY SIMPLE ENGLISH: Use basic vocabulary. Max 8 words per question. Example: 'What color is the book?' or 'What is it used for?'\n"
-        f"2. SHORT OPTIONS: Options must be very short (1 to 4 words max).\n"
-        f"3. MANDATORY PREFIX: Every single option string MUST start with exactly 'A) ', 'B) ', 'C) ', and 'D) '.\n"
-        f"4. 'correct_index' is an integer: 0 for A, 1 for B, 2 for C, 3 for D.\n"
-        f"5. Make questions very obvious and easy for 10-year-olds."
+        f"1. NO IMAGE REFERENCES (CRITICAL): The quiz is TEXT-ONLY. NEVER use phrases like 'in the picture', 'look at this image', 'what color is this', or 'in this photo'.\n"
+        f"2. QUESTION TYPES: Make logical questions based on function or location. Examples: 'Where do you put a {object_name}?', 'We use a {object_name} to...', or 'What is inside a {object_name}?'.\n"
+        f"3. EXTREMELY SIMPLE ENGLISH: Use basic vocabulary. Max 10 words per question.\n"
+        f"4. SHORT OPTIONS: Options must be very short (1 to 4 words max).\n"
+        f"5. MANDATORY PREFIX: Every single option string MUST start with exactly 'A) ', 'B) ', 'C) ', and 'D) '.\n"
+        f"6. 'correct_index' is an integer: 0 for A, 1 for B, 2 for C, 3 for D."
     )
 
     try:
