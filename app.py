@@ -407,7 +407,24 @@ def list_objects():
     except Exception as e:
         return jsonify({"status": "gagal", "pesan": str(e)}), 500
 
-# --- 2. API UNTUK GENERATE / AMBIL SOAL QUIZ ---
+# --- 5. ENDPOINT KHUSUS BUAT BACAIN SOAL KUIS ---
+@app.route('/tts-soal', methods=['POST'])
+def tts_soal():
+    data = request.get_json()
+    if not data or 'text' not in data:
+        return jsonify({"status": "gagal", "pesan": "Butuh parameter 'text'"}), 400
+
+    text = data['text']
+    print(f"🔊 Generate Voice Soal: {text}")
+    
+    # Langsung pakai fungsi helper Edge-TTS yang udah ada di kodemu!
+    audio_b64 = generate_audio_base64(text)
+
+    if audio_b64:
+        return jsonify({"status": "sukses", "audio_base64": audio_b64})
+    else:
+        return jsonify({"status": "gagal", "pesan": "Gagal generate audio"}), 500
+
 # --- 2. API UNTUK GENERATE / AMBIL SOAL QUIZ ---
 @app.route('/generate-quiz', methods=['POST'])
 def generate_quiz():
