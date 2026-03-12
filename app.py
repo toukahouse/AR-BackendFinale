@@ -516,7 +516,8 @@ def generate_quiz():
                 "RAG POLICY:\n"
                 "- Use the RAG facts below as primary source.\n"
                 "- At least 6 out of 10 questions must be directly answerable from these RAG facts.\n"
-                "- If RAG Fact - QnA exists, create at least 2 questions inspired by that QnA pattern (especially location/existence).\n"
+                "- If RAG Fact - QnA exists, create at least 2 questions inspired by that QnA pattern.\n"
+                "- If using location information from RAG, ask concrete place-choice questions like 'Where is the charger?' instead of yes/no questions.\n"
                 "- The remaining questions may use simple common knowledge, but still must stay about the same object.\n"
                 "- Never contradict RAG facts.\n"
                 f"{rag_context}\n"
@@ -545,12 +546,23 @@ def generate_quiz():
             f"5. MANDATORY PREFIX: options must start with exactly 'A) ', 'B) ', 'C) ', 'D) '.\n"
             f"6. correct_index is integer 0..3 matching correct option.\n"
             f"7. Keep questions answerable by kids (no tricky/ambiguous wording).\n"
+            f"8. Every question must have exactly one clearly correct answer. Avoid questions that can have multiple logical answers in real life.\n"
+            f"9. DO NOT make yes/no questions like 'Is this in the living room?' or 'Can it be on a table?'.\n"
+            f"10. Include at least 2 sentence-completion questions using exactly one blank: '____'. Example: 'I use a ____ to charge my phone.'\n"
+            f"11. Prefer these question types: function, part, material, place, sentence completion, and simple vocabulary.\n"
             f"{rag_rules}"
             f"{excluded_block}"
         )
 
     def _normalize_question_text(text):
         return " ".join(str(text).strip().lower().split())
+
+    def _is_ambiguous_yes_no_question(text):
+        normalized = _normalize_question_text(text)
+        blocked_starts = (
+            "is ", "are ", "can ", "do ", "does ", "did ", "was ", "were ", "has ", "have "
+        )
+        return normalized.startswith(blocked_starts)
 
     def _validate_quiz_payload(items):
         if not isinstance(items, list):
@@ -559,6 +571,7 @@ def generate_quiz():
             return False
 
         seen_questions = set()
+        sentence_completion_count = 0
         for item in items:
             if not isinstance(item, dict):
                 return False
@@ -568,7 +581,12 @@ def generate_quiz():
             q_text = _normalize_question_text(item["question"])
             if not q_text or q_text in seen_questions:
                 return False
+            if _is_ambiguous_yes_no_question(q_text):
+                return False
             seen_questions.add(q_text)
+
+            if "____" in str(item["question"]):
+                sentence_completion_count += 1
 
             options = item["options"]
             if not isinstance(options, list) or len(options) != 4:
@@ -581,6 +599,9 @@ def generate_quiz():
             correct_index = item["correct_index"]
             if not isinstance(correct_index, int) or correct_index < 0 or correct_index > 3:
                 return False
+
+        if sentence_completion_count < 2:
+            return False
 
         return True
 
