@@ -548,7 +548,7 @@ def generate_quiz():
             f"7. Keep questions answerable by kids (no tricky/ambiguous wording).\n"
             f"8. Every question must have exactly one clearly correct answer. Avoid questions that can have multiple logical answers in real life.\n"
             f"9. DO NOT make yes/no questions like 'Is this in the living room?' or 'Can it be on a table?'.\n"
-            f"10. Include at least 2 sentence-completion questions using exactly one blank: '____'. Example: 'I use a ____ to charge my phone.'\n"
+            f"10. Include at least 2 sentence-completion questions using exactly one blank: '....'. Example: 'I use a ..... to charge my phone.'\n"
             f"11. Prefer these question types: function, part, material, place, sentence completion, and simple vocabulary.\n"
             f"{rag_rules}"
             f"{excluded_block}"
@@ -585,7 +585,7 @@ def generate_quiz():
                 return False
             seen_questions.add(q_text)
 
-            if "____" in str(item["question"]):
+            if "...." in str(item["question"]):
                 sentence_completion_count += 1
 
             options = item["options"]
