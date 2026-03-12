@@ -50,6 +50,28 @@ def get_first_sentence(text):
     return parts[0] + "." if parts else value
 
 
+def get_article(word):
+    value = str(word or "").strip().lower()
+    if not value:
+        return "A"
+    return "An" if value[0] in "aeiou" else "A"
+
+
+def get_definition_sentence(object_name, text):
+    first_sentence = get_first_sentence(text).strip()
+    if not first_sentence:
+        return ""
+
+    body = first_sentence.rstrip(".").strip()
+    lowered = body.lower()
+    if lowered.startswith("a "):
+        body = body[2:]
+    elif lowered.startswith("an "):
+        body = body[3:]
+
+    return f"{get_article(object_name)} {object_name} is {body}."
+
+
 def get_usage_sentence(text):
     value = str(text or "").strip()
     if not value:
@@ -67,7 +89,7 @@ def get_template_answer_from_rag(object_name, question_key, data_lks):
         return ""
 
     if question_key == "definisi":
-        return get_first_sentence(data_lks.get("deskripsi", ""))
+        return get_definition_sentence(object_name, data_lks.get("deskripsi", ""))
 
     if question_key == "fungsi":
         usage_sentence = get_usage_sentence(data_lks.get("deskripsi", ""))
@@ -548,7 +570,7 @@ def generate_quiz():
             f"7. Keep questions answerable by kids (no tricky/ambiguous wording).\n"
             f"8. Every question must have exactly one clearly correct answer. Avoid questions that can have multiple logical answers in real life.\n"
             f"9. DO NOT make yes/no questions like 'Is this in the living room?' or 'Can it be on a table?'.\n"
-            f"10. Include at least 2 sentence-completion questions using exactly one blank: '....'. Example: 'I use a ..... to charge my phone.'\n"
+            f"10. Include at least 2 sentence-completion questions using exactly one blank: '....'. Example: 'I use a .... to charge my phone.'\n"
             f"11. Prefer these question types: function, part, material, place, sentence completion, and simple vocabulary.\n"
             f"{rag_rules}"
             f"{excluded_block}"
