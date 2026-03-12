@@ -42,71 +42,6 @@ def call_gemini(contents, thinking_level="MINIMAL"):
     )
 
 
-def get_first_sentence(text):
-    value = str(text or "").strip()
-    if not value:
-        return ""
-    parts = [part.strip() for part in value.replace("!", ".").replace("?", ".").split(".") if part.strip()]
-    return parts[0] + "." if parts else value
-
-
-def get_article(word):
-    value = str(word or "").strip().lower()
-    if not value:
-        return "A"
-    return "An" if value[0] in "aeiou" else "A"
-
-
-def get_definition_sentence(object_name, text):
-    first_sentence = get_first_sentence(text).strip()
-    if not first_sentence:
-        return ""
-
-    body = first_sentence.rstrip(".").strip()
-    lowered = body.lower()
-    if lowered.startswith("a "):
-        body = body[2:]
-    elif lowered.startswith("an "):
-        body = body[3:]
-
-    return f"{get_article(object_name)} {object_name} is {body}."
-
-
-def get_usage_sentence(text):
-    value = str(text or "").strip()
-    if not value:
-        return ""
-    parts = [part.strip() for part in value.replace("!", ".").replace("?", ".").split(".") if part.strip()]
-    for part in parts:
-        lowered = part.lower()
-        if "used to" in lowered or lowered.startswith("use ") or "for " in lowered:
-            return part + "."
-    return ""
-
-
-def get_template_answer_from_rag(object_name, question_key, data_lks):
-    if not data_lks:
-        return ""
-
-    if question_key == "definisi":
-        return get_definition_sentence(object_name, data_lks.get("deskripsi", ""))
-
-    if question_key == "fungsi":
-        usage_sentence = get_usage_sentence(data_lks.get("deskripsi", ""))
-        if usage_sentence:
-            return usage_sentence
-        return f"It is used as a {object_name}."
-
-    if question_key == "kalimat":
-        return str(data_lks.get("kalimat_lks", "")).strip()
-
-    if question_key == "ejaan":
-        letters = [ch.upper() for ch in str(object_name) if ch.isalpha()]
-        return " ".join([f"{letter}." for letter in letters]) if letters else ""
-
-    return ""
-
-
 def is_related_custom_question(object_name, question_text):
     obj = str(object_name or "").strip().lower()
     q = " ".join(str(question_text or "").strip().lower().split())
@@ -321,9 +256,6 @@ def tanya_ai():
     if object_name in KNOWLEDGE_BASE:
         data_lks = KNOWLEDGE_BASE[object_name]
 
-    if question_key != "custom":
-        jawaban_ai = get_template_answer_from_rag(object_name, question_key, data_lks)
-
     # --- PROMPT "STRICT TEACHER" MODE (SUPER NATURAL) ---
     base_instruction = (
         f"You are a friendly but strict 4th-grade English teacher.\n"
@@ -351,32 +283,33 @@ def tanya_ai():
                   f"Teacher's Answer (1 short sentence):")
 
     elif question_key == "definisi":
-        # Jika objek ada di RAG, jawaban wajib mengacu pada fact RAG.
-        if data_lks and not jawaban_ai:
+        if data_lks:
             fact = data_lks['deskripsi']
             prompt = (f"{base_instruction}"
                       f"4. The student asks 'What is this?'.\n"
-                      f"5. You MUST answer only from the Fact below. Do not add outside information.\n"
-                      f"6. If the Fact is insufficient, reply exactly: 'I only know basic info about this object.'\n"
+                      f"5. You MUST answer using the Fact below as your main source. Do not contradict it.\n"
+                      f"6. Mention the object name and its shape or physical characteristics in one short sentence.\n"
+                      f"7. If the Fact is insufficient, reply exactly: 'I only know basic info about this object.'\n"
                       f"Fact: {fact}\n"
                       f"Teacher's Answer:")
-        elif not data_lks:
+        else:
             prompt = (f"{base_instruction}"
                       f"4. The student asks 'What is this?' about '{object_name}'.\n"
                       f"5. This object is not in the RAG dataset, so use your general knowledge about '{object_name}'.\n"
-                      f"6. Mention the correct object name in the answer.\n"
+                      f"6. Mention the object name and one simple physical characteristic.\n"
                       f"Teacher's Answer:")
 
     elif question_key == "fungsi":
-        if data_lks and not jawaban_ai:
+        if data_lks:
             fact = data_lks['deskripsi']
             prompt = (f"{base_instruction}"
                       f"4. The student asks 'What is it for?'.\n"
-                      f"5. You MUST answer only from the Fact below. Do not add outside information.\n"
-                      f"6. If the Fact is insufficient, reply exactly: 'I only know basic info about this object.'\n"
+                      f"5. You MUST answer using the Fact below as your main source. Do not contradict it.\n"
+                      f"6. Explain the main use of the object in one short sentence.\n"
+                      f"7. If the Fact is insufficient, reply exactly: 'I only know basic info about this object.'\n"
                       f"Fact: {fact}\n"
                       f"Teacher's Answer:")
-        elif not data_lks:
+        else:
             prompt = (f"{base_instruction}"
                       f"4. The student asks 'What is it for?' about '{object_name}'.\n"
                       f"5. This object is not in the RAG dataset, so use your general knowledge about '{object_name}'.\n"
@@ -384,14 +317,22 @@ def tanya_ai():
                       f"Teacher's Answer:")
 
     elif question_key == "kalimat":
-        if not jawaban_ai:
+        if data_lks and data_lks.get('kalimat_lks'):
+            prompt = (f"{base_instruction}"
+                      f"4. Make one simple 4th-grade English sentence using the word '{object_name}'.\n"
+                      f"5. Use the reference below as your main source, but rewrite it naturally.\n"
+                      f"Reference: {data_lks['kalimat_lks']}\n"
+                      f"Teacher's Answer:")
+        else:
             prompt = (f"{base_instruction}"
                       f"4. Make a simple 4th-grade English sentence using the word '{object_name}'.\n"
                       f"Teacher's Answer:")
                   
     elif question_key == "ejaan":
-        if not jawaban_ai:
-            prompt = f"Spell the word '{object_name}' letter by letter. Separate each letter with a period. Example for 'BOOK': B. O. O. K."
+        prompt = (
+            f"Spell the word '{object_name}' letter by letter. "
+            f"Separate each letter with a period. Example for 'BOOK': B. O. O. K."
+        )
     else:
         return jsonify({"status": "gagal", "pesan": "Kunci pertanyaan salah"}), 400
 
