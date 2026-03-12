@@ -42,6 +42,49 @@ def call_gemini(contents, thinking_level="MINIMAL"):
     )
 
 
+def get_first_sentence(text):
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    parts = [part.strip() for part in value.replace("!", ".").replace("?", ".").split(".") if part.strip()]
+    return parts[0] + "." if parts else value
+
+
+def get_usage_sentence(text):
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    parts = [part.strip() for part in value.replace("!", ".").replace("?", ".").split(".") if part.strip()]
+    for part in parts:
+        lowered = part.lower()
+        if "used to" in lowered or lowered.startswith("use ") or "for " in lowered:
+            return part + "."
+    return ""
+
+
+def get_template_answer_from_rag(object_name, question_key, data_lks):
+    if not data_lks:
+        return ""
+
+    if question_key == "definisi":
+        return get_first_sentence(data_lks.get("deskripsi", ""))
+
+    if question_key == "fungsi":
+        usage_sentence = get_usage_sentence(data_lks.get("deskripsi", ""))
+        if usage_sentence:
+            return usage_sentence
+        return f"It is used as a {object_name}."
+
+    if question_key == "kalimat":
+        return str(data_lks.get("kalimat_lks", "")).strip()
+
+    if question_key == "ejaan":
+        letters = [ch.upper() for ch in str(object_name) if ch.isalpha()]
+        return " ".join([f"{letter}." for letter in letters]) if letters else ""
+
+    return ""
+
+
 def is_related_custom_question(object_name, question_text):
     obj = str(object_name or "").strip().lower()
     q = " ".join(str(question_text or "").strip().lower().split())
@@ -237,11 +280,8 @@ def tanya_ai():
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute("SELECT * FROM objects WHERE object_name = %s", (object_name,))
                     db_result = cur.fetchone()
-                    
-                    # Kalau baris bendanya ada, DAN jawaban untuk tombol ini udah pernah diisi...
                     if db_result and question_key in db_result and db_result[question_key]:
                         print(f"✅ BINGO! Jawaban {question_key} untuk {object_name} diambil dari DATABASE NEON!")
-                        # Return dari DB + Suara langsung, STOP di sini, gak usah panggil Gemini
                         audio_b64 = generate_audio_base64(db_result[question_key])
                         return jsonify({"status": "sukses", "jawaban": db_result[question_key], "audio_base64": audio_b64})
         except Exception as db_error:
@@ -258,6 +298,9 @@ def tanya_ai():
     data_lks = None
     if object_name in KNOWLEDGE_BASE:
         data_lks = KNOWLEDGE_BASE[object_name]
+
+    if question_key != "custom":
+        jawaban_ai = get_template_answer_from_rag(object_name, question_key, data_lks)
 
     # --- PROMPT "STRICT TEACHER" MODE (SUPER NATURAL) ---
     base_instruction = (
@@ -287,7 +330,7 @@ def tanya_ai():
 
     elif question_key == "definisi":
         # Jika objek ada di RAG, jawaban wajib mengacu pada fact RAG.
-        if data_lks:
+        if data_lks and not jawaban_ai:
             fact = data_lks['deskripsi']
             prompt = (f"{base_instruction}"
                       f"4. The student asks 'What is this?'.\n"
@@ -295,14 +338,15 @@ def tanya_ai():
                       f"6. If the Fact is insufficient, reply exactly: 'I only know basic info about this object.'\n"
                       f"Fact: {fact}\n"
                       f"Teacher's Answer:")
-        else:
+        elif not data_lks:
             prompt = (f"{base_instruction}"
-                      f"4. The student asks 'What is this?'.\n"
-                      f"5. This object is not in the RAG dataset, so use your general knowledge.\n"
+                      f"4. The student asks 'What is this?' about '{object_name}'.\n"
+                      f"5. This object is not in the RAG dataset, so use your general knowledge about '{object_name}'.\n"
+                      f"6. Mention the correct object name in the answer.\n"
                       f"Teacher's Answer:")
 
     elif question_key == "fungsi":
-        if data_lks:
+        if data_lks and not jawaban_ai:
             fact = data_lks['deskripsi']
             prompt = (f"{base_instruction}"
                       f"4. The student asks 'What is it for?'.\n"
@@ -310,26 +354,21 @@ def tanya_ai():
                       f"6. If the Fact is insufficient, reply exactly: 'I only know basic info about this object.'\n"
                       f"Fact: {fact}\n"
                       f"Teacher's Answer:")
-        else:
+        elif not data_lks:
             prompt = (f"{base_instruction}"
-                      f"4. The student asks 'What is it for?'.\n"
-                      f"5. This object is not in the RAG dataset, so use your general knowledge.\n"
+                      f"4. The student asks 'What is it for?' about '{object_name}'.\n"
+                      f"5. This object is not in the RAG dataset, so use your general knowledge about '{object_name}'.\n"
+                      f"6. Answer the object's main use in simple English.\n"
                       f"Teacher's Answer:")
 
     elif question_key == "kalimat":
-        # Untuk kalimat, jika ada di RAG pakai data LKS langsung biar mutlak.
-        if data_lks and data_lks.get('kalimat_lks'):
-            jawaban_ai = data_lks['kalimat_lks'].strip()
-        else:
+        if not jawaban_ai:
             prompt = (f"{base_instruction}"
                       f"4. Make a simple 4th-grade English sentence using the word '{object_name}'.\n"
                       f"Teacher's Answer:")
                   
     elif question_key == "ejaan":
-        letters = [ch.upper() for ch in object_name if ch.isalpha()]
-        if letters:
-            jawaban_ai = " ".join([f"{letter}." for letter in letters])
-        else:
+        if not jawaban_ai:
             prompt = f"Spell the word '{object_name}' letter by letter. Separate each letter with a period. Example for 'BOOK': B. O. O. K."
     else:
         return jsonify({"status": "gagal", "pesan": "Kunci pertanyaan salah"}), 400
