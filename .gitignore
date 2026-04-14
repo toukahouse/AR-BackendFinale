@@ -6,3 +6,5 @@ __pycache__/
 .idea/
 .vscode/
 node_modules/
+tester.py
+Image_Dummy.jpeg

@@ -14,6 +14,7 @@ import asyncio
 import edge_tts
 import csv
 import json
+import re
 
 # Muat variabel dari file .env
 load_dotenv()
@@ -436,6 +437,7 @@ def generate_quiz():
 
     object_name = str(data['object_name']).strip().lower()
     force_regenerate = bool(data.get('force_regenerate', False))
+    cached_quiz = None
 
     # A. CEK DATABASE DULU (SIAPA TAU UDAH PERNAH DIBIKIN)
     if not force_regenerate:
@@ -444,15 +446,15 @@ def generate_quiz():
                 with conn.cursor() as cur:
                     cur.execute("SELECT questions_json FROM quizzes WHERE object_name = %s", (object_name,))
                     result = cur.fetchone()
-                    
+
                     if result:
-                        print(f"✅ Quiz untuk {object_name} diambil dari DATABASE NEON!")
-                        return jsonify({"status": "sukses", "data": json.loads(result[0])})
+                        try:
+                            cached_quiz = json.loads(result[0])
+                        except Exception:
+                            cached_quiz = None
+                            print(f"⚠️ Cache quiz untuk {object_name} rusak, akan regenerate.")
         except Exception as e:
             print(f"⚠️ Gagal cek cache database quiz: {e}")
-
-    # B. KALAU BELUM ADA, MINTA GEMINI BUATKAN
-    print(f"🤖 Meminta Gemini membuat 10 Soal Quiz untuk: {object_name}...")
 
     rag_data = KNOWLEDGE_BASE.get(object_name)
     rag_context = ""
@@ -462,6 +464,19 @@ def generate_quiz():
             f"RAG Fact - Example Sentence: {rag_data.get('kalimat_lks', '')}\n"
             f"RAG Fact - QnA: {rag_data.get('qna_lks', '')}\n"
         )
+
+    ambiguous_option_groups = [
+        {"pen", "pencil", "marker", "crayon", "chalk"},
+        {"book", "notebook"},
+        {"sofa", "couch"},
+        {"phone", "smartphone", "mobile phone", "cell phone"},
+        {"cup", "mug", "glass"},
+    ]
+
+    off_topic_keywords = [
+        "president", "prime minister", "germany", "jerman", "planet", "history", "sejarah",
+        "celebrity", "football", "chancellor", "capital city", "politik", "pemerintah"
+    ]
 
     def _build_quiz_prompt(excluded_questions=None):
         excluded_questions = excluded_questions or []
@@ -504,8 +519,8 @@ def generate_quiz():
             f"Rules you MUST follow:\n"
             f"1. NO IMAGE REFERENCES: The quiz is TEXT-ONLY.\n"
             f"2. UNIQUE QUESTIONS: All 10 question texts must be different in meaning and wording.\n"
-            f"3. EXTREMELY SIMPLE ENGLISH: Max 10 words per question.\n"
-            f"4. SHORT OPTIONS: Each option is 1 to 4 words only.\n"
+            f"3. EXTREMELY SIMPLE ENGLISH: Max 8 words per question.\n"
+            f"4. SHORT OPTIONS: Each option is 1 to 3 words only.\n"
             f"5. MANDATORY PREFIX: options must start with exactly 'A) ', 'B) ', 'C) ', 'D) '.\n"
             f"6. correct_index is integer 0..3 matching correct option.\n"
             f"7. Keep questions answerable by kids (no tricky/ambiguous wording).\n"
@@ -513,6 +528,10 @@ def generate_quiz():
             f"9. DO NOT make yes/no questions like 'Is this in the living room?' or 'Can it be on a table?'.\n"
             f"10. Include at least 2 sentence-completion questions using exactly one blank: '....'. Example: 'I use a .... to charge my phone.'\n"
             f"11. Prefer these question types: function, part, material, place, sentence completion, and simple vocabulary.\n"
+            f"12. Every non-blank question must mention '{object_name}' (or its clear short form).\n"
+            f"13. Never use generic templates like 'What do you use to write?'. Use object-focused wording such as 'What is a pen for?'.\n"
+            f"14. Wrong options must be clearly wrong for kids. Never put two options that can both be true in daily life.\n"
+            f"15. Keep all questions on-topic about '{object_name}', never random world facts.\n"
             f"{rag_rules}"
             f"{excluded_block}"
         )
@@ -520,12 +539,41 @@ def generate_quiz():
     def _normalize_question_text(text):
         return " ".join(str(text).strip().lower().split())
 
+    def _normalize_option_text(text):
+        cleaned = re.sub(r"[^a-z0-9 ]+", " ", str(text).strip().lower())
+        return " ".join(cleaned.split())
+
+    def _question_mentions_object(question_text):
+        obj = _normalize_question_text(object_name)
+        q = _normalize_question_text(question_text)
+        if not obj or not q:
+            return False
+        if obj in q:
+            return True
+        obj_parts = [part for part in obj.replace("-", " ").split() if len(part) >= 4]
+        return any(part in q for part in obj_parts)
+
     def _is_ambiguous_yes_no_question(text):
         normalized = _normalize_question_text(text)
         blocked_starts = (
             "is ", "are ", "can ", "do ", "does ", "did ", "was ", "were ", "has ", "have "
         )
         return normalized.startswith(blocked_starts)
+
+    def _is_generic_function_question(text):
+        normalized = _normalize_question_text(text)
+        generic_patterns = (
+            "what do you use to",
+            "what can you use to",
+            "what is used to",
+            "which tool do you use to",
+            "what do we use to",
+        )
+        return any(pattern in normalized for pattern in generic_patterns)
+
+    def _is_off_topic_question(text):
+        normalized = _normalize_question_text(text)
+        return any(keyword in normalized for keyword in off_topic_keywords)
 
     def _validate_quiz_payload(items):
         if not isinstance(items, list):
@@ -546,18 +594,43 @@ def generate_quiz():
                 return False
             if _is_ambiguous_yes_no_question(q_text):
                 return False
+            if _is_off_topic_question(q_text):
+                return False
+            if len(q_text.replace("....", " ").split()) > 8:
+                return False
             seen_questions.add(q_text)
 
-            if "...." in str(item["question"]):
+            has_blank = "...." in str(item["question"])
+            if has_blank:
                 sentence_completion_count += 1
+            elif not _question_mentions_object(q_text):
+                return False
 
             options = item["options"]
             if not isinstance(options, list) or len(options) != 4:
                 return False
             expected_prefix = ["A) ", "B) ", "C) ", "D) "]
+            normalized_options = []
             for idx, opt in enumerate(options):
                 if not isinstance(opt, str) or not opt.startswith(expected_prefix[idx]):
                     return False
+                option_text = _normalize_option_text(opt[3:])
+                if not option_text:
+                    return False
+                if len(option_text.split()) > 3:
+                    return False
+                normalized_options.append(option_text)
+
+            if len(set(normalized_options)) != 4:
+                return False
+
+            if _is_generic_function_question(q_text):
+                if not _question_mentions_object(q_text):
+                    return False
+                for group in ambiguous_option_groups:
+                    group_hits = sum(1 for opt in normalized_options if opt in group)
+                    if group_hits >= 2:
+                        return False
 
             correct_index = item["correct_index"]
             if not isinstance(correct_index, int) or correct_index < 0 or correct_index > 3:
@@ -568,13 +641,22 @@ def generate_quiz():
 
         return True
 
+    if not force_regenerate and cached_quiz:
+        if _validate_quiz_payload(cached_quiz):
+            print(f"✅ Quiz untuk {object_name} diambil dari DATABASE NEON!")
+            return jsonify({"status": "sukses", "data": cached_quiz})
+        print(f"⚠️ Cache quiz lama untuk {object_name} tidak lolos validasi terbaru, regenerate.")
+
+    # B. KALAU BELUM ADA, MINTA GEMINI BUATKAN
+    print(f"🤖 Meminta Gemini membuat 10 Soal Quiz untuk: {object_name}...")
+
     try:
         quiz_data = None
         excluded_questions = []
 
-        for _ in range(3):
+        for _ in range(5):
             prompt = _build_quiz_prompt(excluded_questions)
-            response = call_gemini(contents=prompt, thinking_level="HIGH")
+            response = call_gemini(contents=prompt, thinking_level="MINIMAL")
             raw_text = (response.text or "").strip()
 
             # Bersihkan "sampah" format dari Gemini (kalau dia bandel ngasih ```json)
@@ -606,7 +688,7 @@ def generate_quiz():
                 with conn.cursor() as cur:
                     json_str = json.dumps(quiz_data)
                     cur.execute(
-                        "INSERT INTO quizzes (object_name, questions_json) VALUES (%s, %s) ON CONFLICT (object_name) DO NOTHING",
+                        "INSERT INTO quizzes (object_name, questions_json) VALUES (%s, %s) ON CONFLICT (object_name) DO UPDATE SET questions_json = EXCLUDED.questions_json",
                         (object_name, json_str)
                     )
                     conn.commit()
@@ -621,4 +703,4 @@ def generate_quiz():
         return jsonify({"status": "gagal", "pesan": str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5001, debug=True)
