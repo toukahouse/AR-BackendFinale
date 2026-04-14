@@ -527,11 +527,13 @@ def generate_quiz():
             f"8. Every question must have exactly one clearly correct answer. Avoid questions that can have multiple logical answers in real life.\n"
             f"9. DO NOT make yes/no questions like 'Is this in the living room?' or 'Can it be on a table?'.\n"
             f"10. Include at least 2 sentence-completion questions using exactly one blank: '....'. Example: 'I use a .... to charge my phone.'\n"
-            f"11. Prefer these question types: function, part, material, place, sentence completion, and simple vocabulary.\n"
-            f"12. Every non-blank question must mention '{object_name}' (or its clear short form).\n"
-            f"13. Never use generic templates like 'What do you use to write?'. Use object-focused wording such as 'What is a pen for?'.\n"
-            f"14. Wrong options must be clearly wrong for kids. Never put two options that can both be true in daily life.\n"
-            f"15. Keep all questions on-topic about '{object_name}', never random world facts.\n"
+            f"11. Include at least 1 translation question from Indonesian to English. Example pattern: What is \"meja\" in English?\n"
+            f"12. For that translation question, the correct option must be '{object_name}' (or same word with article/plural form).\n"
+            f"13. Prefer these question types: function, part, material, place, sentence completion, translation (Indonesian-to-English), and simple vocabulary.\n"
+            f"14. Every non-blank and non-translation question must mention '{object_name}' (or its clear short form).\n"
+            f"15. Never use generic templates like 'What do you use to write?'. Use object-focused wording such as 'What is a pen for?'.\n"
+            f"16. Wrong options must be clearly wrong for kids. Never put two options that can both be true in daily life.\n"
+            f"17. Keep all questions on-topic about '{object_name}', never random world facts.\n"
             f"{rag_rules}"
             f"{excluded_block}"
         )
@@ -542,6 +544,17 @@ def generate_quiz():
     def _normalize_option_text(text):
         cleaned = re.sub(r"[^a-z0-9 ]+", " ", str(text).strip().lower())
         return " ".join(cleaned.split())
+
+    def _option_matches_object(option_text):
+        obj = _normalize_option_text(object_name)
+        opt = _normalize_option_text(option_text)
+        if not obj or not opt:
+            return False
+        if opt == obj:
+            return True
+        if opt.endswith("s") and opt[:-1] == obj:
+            return True
+        return obj in opt
 
     def _question_mentions_object(question_text):
         obj = _normalize_question_text(object_name)
@@ -571,6 +584,12 @@ def generate_quiz():
         )
         return any(pattern in normalized for pattern in generic_patterns)
 
+    def _is_translation_question(text):
+        normalized = _normalize_question_text(text)
+        if not normalized.startswith("what is "):
+            return False
+        return " in english" in normalized
+
     def _is_off_topic_question(text):
         normalized = _normalize_question_text(text)
         return any(keyword in normalized for keyword in off_topic_keywords)
@@ -583,6 +602,7 @@ def generate_quiz():
 
         seen_questions = set()
         sentence_completion_count = 0
+        translation_question_count = 0
         for item in items:
             if not isinstance(item, dict):
                 return False
@@ -601,8 +621,11 @@ def generate_quiz():
             seen_questions.add(q_text)
 
             has_blank = "...." in str(item["question"])
+            is_translation = _is_translation_question(item["question"])
             if has_blank:
                 sentence_completion_count += 1
+            elif is_translation:
+                translation_question_count += 1
             elif not _question_mentions_object(q_text):
                 return False
 
@@ -636,7 +659,15 @@ def generate_quiz():
             if not isinstance(correct_index, int) or correct_index < 0 or correct_index > 3:
                 return False
 
+            if is_translation:
+                correct_option = normalized_options[correct_index]
+                if not _option_matches_object(correct_option):
+                    return False
+
         if sentence_completion_count < 2:
+            return False
+
+        if translation_question_count < 1:
             return False
 
         return True
