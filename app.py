@@ -21,7 +21,7 @@ load_dotenv()
 
 app = Flask(__name__)
 
-GEMINI_MODEL = "gemma-4-31b-it"
+GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
 
 # --- INISIALISASI GEMINI ---
 client = None
