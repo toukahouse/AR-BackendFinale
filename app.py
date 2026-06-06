@@ -265,6 +265,7 @@ def tanya_ai():
         f"1. ANSWER ONLY IN 1 SHORT SENTENCE (maximum 10 words). No greeting, no intro.\n"
         f"2. ALWAYS USE ENGLISH. Never reply in Indonesian.\n"
         f"3. NEVER mention 'According to the data', 'Database', 'The text says', or 'I don't have information'. Just answer directly like a real human teacher.\n"
+        f"4. CRITICAL CONTEXT: Treat '{object_name}' strictly as a physical object/noun, NEVER as an adjective or verb.\n"
     )
 
     if question_key == "custom":
@@ -322,13 +323,15 @@ def tanya_ai():
     elif question_key == "kalimat":
         if data_lks and data_lks.get('kalimat_lks'):
             prompt = (f"{base_instruction}"
-                      f"4. Make one simple 4th-grade English sentence using the word '{object_name}'.\n"
-                      f"5. Use the reference below as your main source, but rewrite it naturally.\n"
+                      f"4. Make one simple 4th-grade English sentence using the noun '{object_name}'.\n"
+                      f"5. The word '{object_name}' MUST be used as a physical object/noun.\n"
+                      f"6. Use the reference below as your main source, but rewrite it naturally.\n"
                       f"Reference: {data_lks['kalimat_lks']}\n"
                       f"Teacher's Answer:")
         else:
             prompt = (f"{base_instruction}"
-                      f"4. Make a simple 4th-grade English sentence using the word '{object_name}'.\n"
+                      f"4. Make a simple 4th-grade English sentence describing the physical object '{object_name}'.\n"
+                      f"5. The word '{object_name}' MUST be used as a physical noun, NEVER as an adjective or verb.\n"
                       f"Teacher's Answer:")
                   
     elif question_key == "ejaan":
@@ -511,7 +514,8 @@ def generate_quiz():
             )
 
         return (
-            f"Create a text-only multiple-choice quiz about '{object_name}' for 4th-grade elementary students in Indonesia who are beginners in English.\n"
+            f"Create a text-only multiple-choice quiz about the physical object '{object_name}' for 4th-grade elementary students in Indonesia who are beginners in English.\n"
+            f"IMPORTANT: Treat '{object_name}' strictly as a physical noun (a thing you can touch/see), NEVER as an adjective or verb.\n"
             f"Generate exactly 10 questions.\n"
             f"STRICT OUTPUT FORMAT: Return ONLY a raw JSON array. Do not use Markdown blocks (```json).\n"
             f"Format Structure:\n"
