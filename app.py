@@ -16,6 +16,15 @@ import csv
 import json
 import re
 
+import sentry_sdk
+from sentry_sdk.integrations.flask import FlaskIntegration
+
+sentry_sdk.init(
+    dsn="https://c422523ab6c64cf3028b09b98efbbbf3@o4511517595729920.ingest.us.sentry.io/4511517601562624",
+    integrations=[FlaskIntegration()],
+    traces_sample_rate=1.0
+)
+
 # Muat variabel dari file .env
 load_dotenv()
 
