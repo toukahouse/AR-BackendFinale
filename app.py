@@ -21,7 +21,7 @@ load_dotenv()
 
 app = Flask(__name__)
 
-GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
+GEMINI_MODEL = "gemini-3.1-flash-lite"
 
 # --- INISIALISASI GEMINI ---
 client = None
@@ -32,7 +32,7 @@ except Exception as e:
     print(f"❌ Error Gemini API: {e}")
 
 
-def call_gemini(contents, thinking_level="MINIMAL"):
+def call_gemini(contents, thinking_level="HIGH"):
     config = types.GenerateContentConfig(
         thinking_config=types.ThinkingConfig(thinking_level=thinking_level)
     )
