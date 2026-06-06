@@ -88,7 +88,7 @@ def is_related_custom_question(object_name, question_text):
     )
 
     try:
-        resp = call_gemini(contents=classify_prompt, thinking_level="MINIMAL")
+        resp = call_gemini(contents=classify_prompt, thinking_level="HIGH")
         label = (resp.text or "").strip().upper()
         return label.startswith("RELATED")
     except Exception:
@@ -189,7 +189,7 @@ def identifikasi_objek():
         dan jawab kata bendanya secara umum saja misalnya phone charger menjadi charger, dll"
         """
         
-        response = call_gemini(contents=[image, prompt], thinking_level="MINIMAL")
+        response = call_gemini(contents=[image, prompt], thinking_level="HIGH")
         object_name = (response.text or "").strip().lower()
 
         audio_b64 = "" # Variabel kosong buat suara
@@ -339,7 +339,7 @@ def tanya_ai():
 
     try:
         if not jawaban_ai:
-            response = call_gemini(contents=prompt, thinking_level="MINIMAL")
+            response = call_gemini(contents=prompt, thinking_level="HIGH")
             jawaban_ai = (response.text or "").strip()
 
         if not jawaban_ai:
@@ -380,7 +380,7 @@ def tanya_gambar_manual():
         Jawab dengan Bahasa Inggris yang SANGAT SINGKAT (cocok untuk anak 10 tahun).
         Jangan menyapa, langsung jawabannya. Use simple words. Add commas (,) frequently to create natural reading pauses."
         """
-        response = call_gemini(contents=[image, prompt], thinking_level="MINIMAL")
+        response = call_gemini(contents=[image, prompt], thinking_level="HIGH")
         jawaban_ai_text = (response.text or "").strip()
 
         if not jawaban_ai_text:
@@ -687,7 +687,7 @@ def generate_quiz():
 
         for _ in range(5):
             prompt = _build_quiz_prompt(excluded_questions)
-            response = call_gemini(contents=prompt, thinking_level="MINIMAL")
+            response = call_gemini(contents=prompt, thinking_level="HIGH")
             raw_text = (response.text or "").strip()
 
             # Bersihkan "sampah" format dari Gemini (kalau dia bandel ngasih ```json)
